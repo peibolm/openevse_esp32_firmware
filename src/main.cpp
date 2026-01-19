@@ -99,7 +99,9 @@ static void hardware_setup();
 static void handle_serial();
 
 #if defined(EPOXY_DUINO)
+#include "debug.h" // for debug_set_rapi_path
 static void process_command_line();
+static void process_early_command_line();
 #endif
 
 // -------------------------------------------------------------------
@@ -107,6 +109,11 @@ static void process_command_line();
 // -------------------------------------------------------------------
 void setup()
 {
+  // Parse command line early so we can set options (e.g. RAPI PTY path)
+#if defined(EPOXY_DUINO)
+  process_early_command_line();
+#endif
+
   hardware_setup();
   ESPAL.begin();
 
@@ -209,8 +216,6 @@ void setup()
 void loop() 
 {
   Profile_Start(loop);
-
-  uptimeMillis();
 
   Profile_Start(Mongoose);
   Mongoose.poll(0);
@@ -392,6 +397,9 @@ uint64_t uptimeMillis()
 // Flag to indicate if command line processing should exit early
 static bool cmdline_exit_requested = false;
 
+// Early pass: parse only flags that must be applied before serial/network init
+static void process_early_command_line();
+
 /** Shift argument parameters to the left by one slot. */
 static void shift(int& argc, const char* const*& argv) {
   argc--;
@@ -403,17 +411,38 @@ static bool argEquals(const char* s, const char* t) {
   return strcmp(s, t) == 0;
 }
 
+static void process_early_command_line()
+{
+  for (int i = 1; i < epoxy_argc; i++) {
+    const char* arg = epoxy_argv[i];
+    if (argEquals(arg, "--rapi-serial") || argEquals(arg, "--rapi")) {
+      if (i + 1 < epoxy_argc) {
+        const char* path = epoxy_argv[i + 1];
+        debug_set_rapi_path(path);
+        fprintf(stderr, "Set RAPI serial path: %s\n", path);
+        i++; // skip value
+      } else {
+        fprintf(stderr, "Error: --rapi-serial requires a path argument\n");
+        cmdline_exit_requested = true;
+        // Do not exit here; let later processing handle usage/exit
+      }
+    }
+  }
+}
+
 /** Print usage. */
 static void printUsage() {
   fprintf(
     stderr,
-    "Usage: %s [--help|-h] [--set-config NAME=VALUE] [--] [args ...]\n"
+    "Usage: %s [--help|-h] [--rapi-serial PATH] [--set-config NAME=VALUE] [--] [args ...]\n"
     "Config options can be set with: --set-config NAME=VALUE\n"
     "  Examples:\n"
     "    --set-config www_http_port=8080\n"
     "    --set-config www_https_port=8443\n"
     "    --set-config mqtt_server=192.168.1.100\n"
-    "    --set-config mqtt_port=1883\n",
+    "    --set-config mqtt_port=1883\n"
+    "Runtime options (EPOXY_DUINO native build):\n"
+    "  --rapi-serial PATH   Set PTY/serial path for RAPI (e.g., /dev/pts/5)\n",
     epoxy_argv[0]
   );
 }
@@ -427,7 +456,19 @@ static int parseFlags(int argc, const char* const* argv) {
   shift(argc, argv); // skip the name of the program at argv[0]
   
   while (argc > 0) {
-    if (argEquals(argv[0], "--set-config")) {
+    if (argEquals(argv[0], "--rapi-serial") || argEquals(argv[0], "--rapi")) {
+      shift(argc, argv);
+      if (argc == 0) {
+        fprintf(stderr, "Error: --rapi-serial requires a path argument\n");
+        cmdline_exit_requested = true;
+        return argc_original - argc;
+      }
+      const char* path = argv[0];
+      // Set the RAPI PTY path before Serial begin()
+      debug_set_rapi_path(path);
+      fprintf(stderr, "Set RAPI serial path: %s\n", path);
+    }
+    else if (argEquals(argv[0], "--set-config")) {
       shift(argc, argv);
       if (argc == 0) {
         fprintf(stderr, "Error: --set-config requires an argument\n");
