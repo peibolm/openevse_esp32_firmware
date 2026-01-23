@@ -607,16 +607,16 @@ bool config_serialize(DynamicJsonDocument &doc, bool longNames, bool compactOutp
 }
 
 bool config_set(const char *name, uint32_t val) {
-  user_config.set(name, val);
+  return user_config.set(name, val);
 }
 bool config_set(const char *name, String val) {
-  user_config.set(name, val);
+  return user_config.set(name, val);
 }
 bool config_set(const char *name, bool val) {
-  user_config.set(name, val);
+  return user_config.set(name, val);
 }
 bool config_set(const char *name, double val) {
-  user_config.set(name, val);
+  return user_config.set(name, val);
 }
 
 bool config_set_opt_string(const char *name, const char *value) {
