@@ -36,11 +36,16 @@ public:
             return result;
         }
 
-        // Extract serial number
+        // Extract serial number (bounded to 64 bits, similar to OpenSSL)
         uint64_t serial = 0;
-        for(size_t i = 0; i < x509.serial.len; i++)
+        size_t serial_len = x509.serial.len;
+        if(serial_len > 0 && x509.serial.p != nullptr)
         {
-            serial = (serial << 8) | x509.serial.p[i];
+            size_t start = (serial_len > 8) ? (serial_len - 8) : 0;
+            for(size_t i = start; i < serial_len; i++)
+            {
+                serial = (serial << 8) | static_cast<uint64_t>(x509.serial.p[i]);
+            }
         }
         result.serial = serial;
 

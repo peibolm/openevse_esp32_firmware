@@ -5,19 +5,30 @@
 #include <cstdint>
 
 /**
- * Abstract interface for certificate validation operations.
- * This decouples the certificate management logic from specific crypto libraries.
+ * Abstract base class for X.509 certificate validation and parsing
+ * 
+ * Provides an interface for validating certificates and private keys in PEM format,
+ * as well as extracting certificate metadata such as issuer DN, subject DN, and serial numbers.
+ * 
+ * @note Serial number handling: X.509 certificates can have serial numbers up to 20 bytes,
+ *       but this validator truncates them to 64-bit (8 bytes). Only the least significant
+ *       8 bytes are retained during truncation. Applications requiring full serial number
+ *       precision should implement custom validation logic.
  */
 class CertificateValidator
 {
 public:
     /**
      * Certificate validation result
+     * 
+     * @note The serial field contains only the least significant 8 bytes of the certificate's
+     *       serial number. Serial numbers larger than 8 bytes will be truncated. For certificates
+     *       with larger serial numbers, use getSerialNumber() and handle truncation appropriately.
      */
     struct ValidationResult
     {
         bool valid;           ///< Whether the certificate is valid
-        uint64_t serial;      ///< Certificate serial number
+        uint64_t serial;      ///< Certificate serial number (truncated to 8 bytes, LSB retained)
         std::string issuer;   ///< Certificate issuer DN string
         std::string subject;  ///< Certificate subject DN string
         std::string error;    ///< Error message if invalid
@@ -55,8 +66,15 @@ public:
 
     /**
      * Extract the serial number from a certificate
+     * 
      * @param cert_pem The certificate in PEM format
-     * @return Serial number as uint64_t
+     * @return Serial number as uint64_t, truncated to 64-bit. Only the least significant
+     *         8 bytes of the actual certificate serial number are returned. X.509 certificates
+     *         can have serial numbers up to 20 bytes; any bytes beyond the least significant
+     *         8 bytes are discarded.
+     * 
+     * @note For full precision serial number handling, implement custom parsing of the
+     *       certificate's ASN.1 structure.
      */
     virtual uint64_t getSerialNumber(const std::string &cert_pem) = 0;
 };

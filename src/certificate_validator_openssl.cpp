@@ -64,14 +64,46 @@ public:
         if(serial_bn)
         {
             // Convert BIGNUM to uint64_t (take last 8 bytes for now)
-            unsigned char buffer[8];
-            int len = BN_bn2bin(serial_bn, buffer);
-            uint64_t serial = 0;
-            for(int i = 0; i < len && i < 8; i++)
+            int num_bytes = BN_num_bytes(serial_bn);
+            if(num_bytes > 0)
             {
-                serial = (serial << 8) | buffer[i];
+                uint64_t serial = 0;
+
+                if(num_bytes <= 8)
+                {
+                    // Fits into 8 bytes, safe to use a fixed-size buffer
+                    unsigned char buffer[8];
+                    int len = BN_bn2bin(serial_bn, buffer);
+                    if(len > 0)
+                    {
+                        for(int i = 0; i < len; i++)
+                        {
+                            serial = (serial << 8) | buffer[i];
+                        }
+                    }
+                }
+                else
+                {
+                    // Serial is larger than 8 bytes, take the least significant 8 bytes
+                    unsigned char *buffer = new unsigned char[num_bytes];
+                    int len = BN_bn2bin(serial_bn, buffer);
+                    if(len > 0)
+                    {
+                        int start = len - 8;
+                        if(start < 0)
+                        {
+                            start = 0;
+                        }
+                        for(int i = start; i < len; i++)
+                        {
+                            serial = (serial << 8) | buffer[i];
+                        }
+                    }
+                    delete[] buffer;
+                }
+
+                result.serial = serial;
             }
-            result.serial = serial;
             BN_free(serial_bn);
         }
 
