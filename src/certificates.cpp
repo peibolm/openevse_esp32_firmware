@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <memory>
 
 #include "emonesp.h"
 #include "certificates.h"
@@ -17,7 +18,7 @@ bool CertificateStore::Certificate::deserialize(JsonObject &obj)
   std::string cert = obj["certificate"].as<std::string>();
 
   // Get the certificate validator instance
-  static CertificateValidator *validator = createCertificateValidator();
+  std::unique_ptr<CertificateValidator> validator(createCertificateValidator());
   if(!validator) {
     DBUGLN("Failed to create certificate validator");
     return false;
