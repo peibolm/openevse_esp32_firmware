@@ -84,24 +84,6 @@ public:
         mbedtls_pk_free(&pk);
         return valid;
     }
-
-    std::string getIssuerDN(const std::string &cert_pem) override
-    {
-        ValidationResult result = validateCertificate(cert_pem);
-        return result.issuer;
-    }
-
-    std::string getSubjectDN(const std::string &cert_pem) override
-    {
-        ValidationResult result = validateCertificate(cert_pem);
-        return result.subject;
-    }
-
-    uint64_t getSerialNumber(const std::string &cert_pem) override
-    {
-        ValidationResult result = validateCertificate(cert_pem);
-        return result.serial;
-    }
 };
 
 /**
