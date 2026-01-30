@@ -1299,6 +1299,9 @@ void web_server_setup()
 
   server.onNotFound(handleNotFound);
 
+  // Setup load sharing endpoints
+  web_server_load_sharing_setup();
+
   DEBUG.println("Server started");
 }
 
