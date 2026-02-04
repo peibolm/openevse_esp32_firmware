@@ -61,6 +61,7 @@
 #include "event_log.h"
 #include "evse_man.h"
 #include "scheduler.h"
+#include "loadsharing_discovery_task.h"
 
 #include "legacy_support.h"
 #include "certificates.h"
@@ -188,6 +189,10 @@ void setup()
   // Bring up the web server
   web_server_setup();
   DBUGF("After web_server_setup: %d", ESPAL.getFreeHeap());
+
+  // Initialize background discovery task for load sharing
+  loadSharingDiscoveryTask.begin();
+  DBUGF("After loadSharingDiscoveryTask.begin: %d", ESPAL.getFreeHeap());
 
 #ifdef ENABLE_OTA
   ota_setup();

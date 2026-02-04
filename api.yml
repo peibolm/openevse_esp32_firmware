@@ -1215,6 +1215,9 @@ components:
           description: Firmware version if available.
         online:
           type: boolean
+        joined:
+          type: boolean
+          description: True if this peer is joined to the load sharing group (manually configured).
         last_seen:
           type: string
           format: date-time

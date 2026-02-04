@@ -5,7 +5,7 @@
 #include <Arduino.h>
 #include "web_server.h"
 #include "app_config.h"
-#include "loadsharing_discovery.h"
+#include "loadsharing_discovery_task.h"
 #include "debug.h"
 #include <vector>
 
@@ -34,8 +34,7 @@ void handleLoadSharingDiscover(MongooseHttpServerRequest *request, MongooseHttpS
 //
 // -------------------------------------------------------------------
 
-void
-handleLoadSharingPeers(MongooseHttpServerRequest *request)
+void handleLoadSharingPeers(MongooseHttpServerRequest *request)
 {
   MongooseHttpServerResponseStream *response;
   if(false == requestPreProcess(request, response)) {
@@ -56,20 +55,22 @@ handleLoadSharingPeers(MongooseHttpServerRequest *request)
   request->send(response);
 }
 
-void
-handleLoadSharingPeersGet(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
+void handleLoadSharingPeersGet(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
 {
   DBUGLN("[LoadSharing] GET /loadsharing/peers");
   
-  // Build JSON response array
-  const size_t capacity = JSON_OBJECT_SIZE(5) + 512;
+  // Build JSON response array (direct array, no wrapper object)
+  const size_t capacity = JSON_ARRAY_SIZE(20) + JSON_OBJECT_SIZE(6) * 20 + 1024;
   DynamicJsonDocument doc(capacity);
-  JsonArray peerArray = doc.createNestedArray("data");
+  JsonArray peerArray = doc.to<JsonArray>();
 
-  DBUGLN("[LoadSharing] Discovering peers...");
-  
-  // Discover peers using the mDNS discovery wrapper  
-  std::vector<DiscoveredPeer> discoveredPeers = loadSharingDiscovery.discoverPeers();
+  // Get the last discovered peers from the background discovery task (cached results)
+  std::vector<DiscoveredPeer> discoveredPeers;
+  // Use the task's cached results instead of doing a live query
+  // This keeps the HTTP handler non-blocking
+  discoveredPeers = loadSharingDiscoveryTask.getCachedPeers();
+  DBUGF("[LoadSharing] Using cached results from background task. Query in progress: %s",
+        loadSharingDiscoveryTask.isQueryInProgress() ? "yes" : "no");
 
   DBUGF("[LoadSharing] Found %d discovered peers", discoveredPeers.size());
   DBUGF("[LoadSharing] Found %d configured peers", configuredPeers.size());
@@ -77,9 +78,21 @@ handleLoadSharingPeersGet(MongooseHttpServerRequest *request, MongooseHttpServer
   // Track which hosts we've already added (to avoid duplicates)
   std::vector<String> addedHosts;
 
+  // Helper function to check if a host is in the configured group
+  auto isJoined = [&configuredPeers](const String &host) -> bool {
+    for(const auto &configuredHost : configuredPeers) {
+      if (configuredHost == host) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   // Add discovered peers to response
   for(const auto &peer : discoveredPeers) {
-    DBUGF("[LoadSharing] Adding discovered peer: %s", peer.hostname.c_str());
+    bool joined = isJoined(peer.hostname);
+    DBUGF("[LoadSharing] Adding discovered peer: %s (joined: %s)", 
+          peer.hostname.c_str(), joined ? "yes" : "no");
     
     JsonObject peerObj = peerArray.createNestedObject();
     peerObj["id"] = "unknown";
@@ -87,11 +100,12 @@ handleLoadSharingPeersGet(MongooseHttpServerRequest *request, MongooseHttpServer
     peerObj["host"] = peer.hostname;
     peerObj["ip"] = peer.ipAddress;
     peerObj["online"] = true;
+    peerObj["joined"] = joined;
     
     addedHosts.push_back(peer.hostname);
   }
 
-  // Add configured peers that aren't already discovered
+  // Add configured peers that aren't already discovered (offline peers)
   for(const auto &configuredHost : configuredPeers) {
     // Check if this host is already in the response (discovered)
     bool alreadyAdded = false;
@@ -103,7 +117,7 @@ handleLoadSharingPeersGet(MongooseHttpServerRequest *request, MongooseHttpServer
     }
     
     if (!alreadyAdded) {
-      DBUGF("[LoadSharing] Adding configured peer: %s", configuredHost.c_str());
+      DBUGF("[LoadSharing] Adding configured peer (offline): %s", configuredHost.c_str());
       
       JsonObject peerObj = peerArray.createNestedObject();
       peerObj["id"] = "unknown";
@@ -111,6 +125,7 @@ handleLoadSharingPeersGet(MongooseHttpServerRequest *request, MongooseHttpServer
       peerObj["host"] = configuredHost;
       peerObj["ip"] = "";
       peerObj["online"] = false;  // Not currently discovered
+      peerObj["joined"] = true;   // Always true for configured peers
       
       addedHosts.push_back(configuredHost);
     }
@@ -120,8 +135,7 @@ handleLoadSharingPeersGet(MongooseHttpServerRequest *request, MongooseHttpServer
   serializeJson(doc, *response);
 }
 
-void
-handleLoadSharingPeersPost(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
+void handleLoadSharingPeersPost(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
 {
   DBUGLN("[LoadSharing] POST /loadsharing/peers");
   
@@ -186,16 +200,14 @@ handleLoadSharingPeersPost(MongooseHttpServerRequest *request, MongooseHttpServe
   response->print("{\"msg\":\"done\"}");
 }
 
-void
-handleLoadSharingPeersDelete(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
+void handleLoadSharingPeersDelete(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
 {
   // TODO: Phase 1.4 - Remove peer from configured group
   response->setCode(501);
   response->print("{\"msg\":\"Not implemented\"}");
 }
 
-void
-handleLoadSharingPeersDeleteWithHost(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response, const String &host)
+void handleLoadSharingPeersDeleteWithHost(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response, const String &host)
 {
   DBUGF("[LoadSharing] DELETE /loadsharing/peers/%s", host.c_str());
   
@@ -224,19 +236,13 @@ handleLoadSharingPeersDeleteWithHost(MongooseHttpServerRequest *request, Mongoos
   response->print("{\"msg\":\"done\"}");
 }
 
-void
-handleLoadSharingDiscover(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
+void handleLoadSharingDiscover(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response)
 {
   DBUGLN("[LoadSharing] POST /loadsharing/discover");
   
-  // Invalidate the discovery cache to force immediate re-discovery
-  DBUGLN("[LoadSharing] Invalidating discovery cache and triggering new scan...");
-  loadSharingDiscovery.invalidateCache();
-  
-  // Perform immediate discovery
-  auto discoveredPeers = loadSharingDiscovery.discoverPeers();
-  
-  DBUGF("[LoadSharing] Discovery complete - found %d peers", discoveredPeers.size());
+  // Trigger manual discovery via the background task
+  loadSharingDiscoveryTask.triggerDiscovery();
+  DBUGLN("[LoadSharing] Triggered background discovery task");
   
   response->setCode(200);
   response->print("{\"msg\":\"done\"}");
@@ -291,6 +297,4 @@ void web_server_load_sharing_setup()
 
     request->send(response);
   });
-
-  DBUGLN("[LoadSharing] Web server endpoints registered");
 }
