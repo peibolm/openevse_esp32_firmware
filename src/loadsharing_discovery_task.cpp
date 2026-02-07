@@ -126,15 +126,15 @@ void LoadSharingDiscoveryTask::startAsyncQuery() {
   //   - name: NULL (search for all instances)
   //   - service_type: "openevse" (without leading underscore)
   //   - proto: "tcp" (without leading underscore)
-  //   - type: MDNS_IP_PROTOCOL_V4 (IPv4 support)
+  //   - type: MDNS_TYPE_PTR (PTR record for service discovery)
   //   - timeout_ms: query timeout
   //   - max_results: 20 (collect up to 20 results)
   //   - notifier: NULL (we'll poll instead)
-  _active_query = (void*)mdns_query_async_start(
+  _active_query = (void*)mdns_query_async_new(
       NULL,
       "openevse",
       "tcp",
-      MDNS_IP_PROTOCOL_V4,
+      MDNS_TYPE_PTR,
       _query_timeout_ms,
       20,
       NULL
@@ -161,8 +161,8 @@ bool LoadSharingDiscoveryTask::pollAsyncQuery() {
   // Returns true when query is complete (whether or not results were found)
   bool isComplete = mdns_query_async_get_results(
       (mdns_search_once_t*)_active_query,
-      &results,
-      100  // 100ms polling timeout
+      100,  // 100ms polling timeout
+      &results
   );
   
   if (isComplete) {
@@ -204,7 +204,7 @@ bool LoadSharingDiscoveryTask::pollAsyncQuery() {
       
       // Extract IP address
       if (r->addr) {
-        uint32_t ip = r->addr->u_addr.addr;
+        uint32_t ip = r->addr->addr.u_addr.ip4.addr;
         peer.ipAddress = String((ip & 0xFF)) + "." +
                         String((ip >> 8) & 0xFF) + "." +
                         String((ip >> 16) & 0xFF) + "." +
