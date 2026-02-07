@@ -49,6 +49,10 @@ private:
   unsigned long _cacheTtl;       // Cache time-to-live in milliseconds
   bool _cacheValid;              // Whether cache has been populated
   
+  // Group peers (manually added to the group via API)
+  std::vector<String> _groupPeers;           // List of peer hostnames in the group
+  bool _groupPeersDirty;                     // True if group peers need to be saved
+  
   // Query timing configuration
   unsigned long _poll_interval_ms;           // How often task wakes (default 2000ms)
   unsigned long _discovery_interval_ms;      // How often to start new queries (default 60000ms)
@@ -87,6 +91,20 @@ private:
    * @brief Cleanup active query resources
    */
   void cleanupQuery();
+  
+  /**
+   * @brief Load group peers from SPIFFS
+   * 
+   * @return true if loaded successfully, false if file missing or corrupt
+   */
+  bool loadGroupPeers();
+  
+  /**
+   * @brief Save group peers to SPIFFS
+   * 
+   * @return true if saved successfully
+   */
+  bool saveGroupPeers();
   
 protected:
   void setup();
@@ -169,6 +187,55 @@ public:
   unsigned long getLastResultCount() const {
     return _last_result_count;
   }
+  
+  // Group peer management methods
+  
+  /**
+   * @brief Add a peer to the group
+   * 
+   * @param hostname Hostname or IP address of the peer
+   * @return true if added successfully, false if already exists
+   */
+  bool addGroupPeer(const String& hostname);
+  
+  /**
+   * @brief Remove a peer from the group
+   * 
+   * @param hostname Hostname or IP address of the peer
+   * @return true if removed successfully, false if not found
+   */
+  bool removeGroupPeer(const String& hostname);
+  
+  /**
+   * @brief Get list of group peers
+   * 
+   * @return Vector of group peer hostnames
+   */
+  const std::vector<String>& getGroupPeers() const;
+  
+  /**
+   * @brief Check if a hostname is in the group
+   * 
+   * @param hostname Hostname to check
+   * @return true if hostname is in group
+   */
+  bool isGroupPeer(const String& hostname) const;
+  
+  /**
+   * @brief Get unified peer list (discovered + group offline peers)
+   * Helper for GET /loadsharing/peers endpoint
+   * 
+   * @param includeDiscovered Include discovered peers (default: true)
+   * @param includeGroup Include group peers (default: true)
+   * @return Vector of peer info with online/joined status
+   */
+  struct PeerInfo {
+    String hostname;
+    String ipAddress;
+    bool online;    // True if discovered via mDNS
+    bool joined;    // True if in group
+  };
+  std::vector<PeerInfo> getAllPeers(bool includeDiscovered = true, bool includeGroup = true) const;
 };
 
 /**
