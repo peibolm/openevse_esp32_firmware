@@ -286,6 +286,64 @@ Implement mDNS-based discovery and peer list management via REST API.
 - **Build Status**: ✅ Compiles successfully on native build
 - **Testing**: ✅ Storage methods integrated and callable via REST API
 
+### Phase 1 Integration Test Suite
+
+**Status**: ✅ COMPLETED - 14 tests, 100% passing (339.88s runtime)
+
+**Location**: `tests/integration/test_loadsharing_peer_management.py` (336 lines)
+
+**Test Infrastructure**:
+- **Architecture**: Pytest + Docker + socat
+  - Each test spawns paired instances: Docker emulator + native firmware binary
+  - TCP-to-PTY bridge (socat) connects emulator's TCP RAPI port to host PTY
+  - Solves namespace isolation: each test gets unique real PTYs (`/dev/pts/18`, `/dev/pts/19`, etc.)
+  - Isolated persistent storage: each native firmware instance runs in unique temp directory
+- **Fixtures** (`conftest.py`, 527 lines):
+  - `pytest_configure()` - session initialization with port offset counter
+  - `unique_port_offset()` - sequential assignment (0-9) per test
+  - `peer_hostname_factory()` - unique hostnames per test offset (prevents NVS persistence collisions)
+  - `instance_pair()` - factory for spawning paired emulator+native with auto-cleanup
+  - `instance_pair_auto()` - convenience wrapper with auto-assigned unique ports
+  - `check_mdns_support()` - mDNS validation + pre-cleanup stuck resources
+  - Docker/image management, HTTP readiness polling (30s timeout), aggressive port cleanup (fuser, socat kill)
+
+**Test Coverage** (14 tests):
+
+*Core Peer Management* (9 tests):
+- `test_peers_endpoint_initial_state` - GET /loadsharing/peers returns correct structure
+- `test_discover_trigger` - POST /loadsharing/discover returns 200 OK
+- `test_peer_discovery_mdns[2/3/4]` - mDNS discovery with 2, 3, and 4 simultaneous instances (parametrized)
+- `test_add_peer_manual` - POST /loadsharing/peers adds peer with `joined=true`
+- `test_add_peer_duplicate_rejection` - POST duplicate peer returns 400
+- `test_delete_peer` - DELETE /loadsharing/peers/{host} removes joined status
+- `test_delete_nonexistent_peer` - DELETE nonexistent peer returns 404
+- `test_discovered_peers_joined_status[2/3/4]` - Verify discovered peers have correct `joined` status (parametrized)
+
+*Response Structure* (2 tests):
+- `test_peers_response_structure` - Validate JSON array with required fields (id, name, host, joined, ip, online)
+- `test_error_response_structure` - Verify error responses include `msg` or `error` field
+
+**Prerequisites**:
+- Docker (emulator image)
+- socat (TCP-to-PTY bridge)
+- Avahi/mDNS (discovery validation)
+- Native firmware build (`.pio/build/native/program`)
+- Python 3.7+ with pytest, docker, requests libraries
+
+**CI/CD Integration**:
+- GitHub Actions workflow: `.github/workflows/integration_tests.yaml`
+- Triggers: after build.yaml completes OR manual workflow_dispatch
+- Matrix: parametrizes test runs with 2/3/4 instance counts
+- Artifact handling: downloads native binary from build workflow
+- Result publishing: publishes test report to PR
+
+**Known Limitations & Workarounds**:
+1. Docker/PTY namespace isolation: Solved with socat TCP-to-PTY bridge
+2. NVS persistence collisions: Solved with isolated temp directories per instance
+3. Port conflicts between tests: Solved with sequential counter-based port assignment
+4. mDNS discovery timing: Tests wait up to 30s for peer discovery
+5. Cannot parallelize tests: All use fixed port ranges (8000-8003, 8080-8083)
+
 ---
 
 ## Phase 2: Peer Status Ingestion
@@ -1226,6 +1284,183 @@ However, **manual hardware testing is not required for PR approval** since diver
 5. **Web UI location**: Where should load sharing config live? (Recommend: new "Load Sharing" tab in settings)
 
 6. **Hardware testing**: Can feature be tested with multiple ESP32s on same network? (Recommend: yes, but not required for initial PR)
+
+---
+
+## Comprehensive Testing Strategy
+
+### Phase-by-Phase Testing Plan
+
+**Phase 1: Discovery & Peer Management** ✅ COMPLETED
+- **Unit Tests** (conftest.py fixtures):
+  - Port offset uniqueness (14 tests)
+  - PTY bridge creation & cleanup
+  - Peer hostname factory (test-offset based)
+- **Integration Tests** (test_loadsharing_peer_management.py):
+  - Peer discovery via mDNS (2/3/4 instances)
+  - REST API endpoints (GET/POST/DELETE /loadsharing/peers)
+  - Response structure validation
+  - Duplicate rejection & 404 handling
+- **Coverage**: 14 tests, 339.88s runtime, 100% passing
+- **Scope**: All Phase 1 endpoints working end-to-end
+
+**Phase 2: Peer Status Ingestion** (PLANNED)
+- **Integration Tests** (new file):
+  - WebSocket connection establishment (Phase 2.1)
+  - HTTP status endpoint polling (Phase 2.2)
+  - Heartbeat timeout detection (Phase 2.3)
+  - Status cache updates
+  - Offline peer marking
+- **Test Scenarios**:
+  - Single peer status retrieval
+  - Multi-peer (3/4) concurrent status updates
+  - WebSocket reconnection after disconnection
+  - Heartbeat timeout (simulate after 35+ seconds)
+  - Graceful handling of missing endpoints (404)
+- **Fixtures to Add**:
+  - `status_update_handler()` - inject custom status into peer
+  - `disconnect_peer()` - simulate network unavailability
+  - `wait_for_peer_status()` - poll until status cache updated
+- **Expected Runtime**: ~120s (3 test scenarios × 3/4 instances)
+
+**Phase 3: Allocation & Dispatch** (PLANNED)
+- **Unit Tests**:
+  - Allocation algorithm with synthetic peer configs
+  - Edge cases: zero peers, zero capacity, all offline
+  - Deterministic ordering (sorted by priority)
+  - Current limiting & rounding
+- **Integration Tests**:
+  - Allocation result published to `/allocations` endpoint
+  - Peer current limit updated upon state change
+  - Failsafe triggering on allocation failure
+- **Test Scenarios**:
+  - 2-peer equal split
+  - 3-peer unequal capacity
+  - Priority-based allocation
+  - Current rounding edge cases
+  - Insufficient capacity for all peers
+- **Expected Runtime**: ~60s
+
+**Phase 4: Failsafe & Error Recovery** (PLANNED)
+- **Integration Tests**:
+  - Strict mode: disable on any peer loss
+  - Graceful mode: safe current fallback
+  - Recovery when peer comes back online
+  - Config mismatch detection & fallback
+- **Test Scenarios**:
+  - Single peer disconnect (detect via heartbeat timeout)
+  - Multiple peer simultaneous disconnect
+  - Peer reconnection after timeout
+  - Config hash mismatch (trigger conservative mode)
+- **Simulations**:
+  - Kill peer process → detect in 35s
+  - Pause peer (no status updates) → heartbeat timeout
+  - Modify peer config → hash mismatch detection
+- **Expected Runtime**: ~200s (includes timeout waits)
+
+**Phase 5: Web UI/Config UI** (PLANNED)
+- **UI Snapshot Tests**:
+  - Group configuration dialog rendering
+  - Peer list display with online/offline status
+  - Allocation display (current per peer)
+  - Failsafe indicator
+- **Manual Testing** (recommended):
+  - Add peer via discovery
+  - Edit group max current
+  - Observe allocation updates
+  - Trigger failsafe & recovery
+- **Automated Tests**:
+  - Configuration API validation
+  - Config persistence across restart
+  - Invalid config rejection
+
+**Phase 6: Config Sync** (PLANNED)
+- **Integration Tests**:
+  - Config version increment on change
+  - Config hash computation & embedding in WebSocket
+  - Peer config mismatch detection
+  - Automatic sync via WebSocket
+- **Test Scenarios**:
+  - One peer modifies group max current
+  - Detect mismatch on other peers
+  - Sync mechanism propagates change
+  - Verification peers now have matching config
+- **Message Injection**:
+  - Mock peer with old config version
+  - Send status with mismatched hash
+  - Verify conservative behavior triggered
+- **Expected Runtime**: ~80s
+
+**Phase 7: State Machine & Transitions** (PLANNED)
+- **Unit Tests**:
+  - State transition table validation
+  - Invalid transition rejection
+  - State-specific behavior correctness
+- **Integration Tests**:
+  - Full state machine workout (all transitions)
+  - Error recovery paths
+  - Initialization sequence
+  - Shutdown sequence
+- **Test Scenarios**:
+  - Disabled → Discovering → Ready → Allocating → Active
+  - Active → Offline (peer loss) → Failsafe
+  - Failsafe → Recovering → Active
+  - Config mismatch → Conservative → Synced
+- **Expected Runtime**: ~120s
+
+**Phase 8: End-to-End & Stress Tests** (PLANNED)
+- **Full Workflow Tests**:
+  - 8-peer concurrent operation
+  - Configuration changes during operation
+  - Progressive peer addition (start with 2, add to 8)
+  - Progressive peer removal (8 → 2)
+- **Stress Tests**:
+  - High-frequency status updates (100/sec)
+  - Network instability (latency, jitter, packet loss)
+  - Config sync storms (multiple config changes)
+  - Extended operation (5+ minutes)
+- **Failure Scenarios**:
+  - Cascading peer failures
+  - Peer recovery during allocation
+  - Config conflicts + simultaneous failures
+- **Fixtures to Add**:
+  - `network_chaos()` - inject latency/loss
+  - `rapid_config_changes()` - stress config sync
+  - `peer_lifecycle()` - add/remove peers over time
+- **Expected Runtime**: 600s+ (10+ minutes for realistic scenarios)
+
+### Test Infrastructure Recommendations
+
+1. **Continue Docker + socat approach** (Phase 1 proven working)
+   - Reuse `instance_pair()` fixture for all integration tests
+   - Extend parametrization (2/3/4/8 instances)
+   - Add network chaos injection via `tc` (traffic control)
+
+2. **Add Python-based simulation layer** for Phase 8
+   - Mock HTTP/WebSocket clients
+   - Time acceleration (10x) for heartbeat timeouts
+   - Deterministic failure injection
+
+3. **Measurement instrumentation**
+   - Track allocation computation time (ms)
+   - Measure WebSocket message latency
+   - Monitor memory usage with 8 peers
+   - Log state machine transitions for post-analysis
+
+4. **Test data management**
+   - Store test results in `.../tests/integration/output/`
+   - Generate allure reports for trending
+   - Archive failing test logs with timestamps
+
+### Success Criteria for Full Test Suite
+
+- ✅ Phase 1: 14 integration tests passing (COMPLETE)
+- ✅ Phase 2: 15+ tests covering WebSocket, polling, timeouts
+- ✅ Phase 3: 10+ allocation algorithm tests + 5+ integration scenarios
+- ✅ Phase 4: Failsafe + recovery tests (strict & graceful modes)
+- ✅ Phase 5-7: Cumulative coverage 50+ integration tests
+- ✅ Phase 8: 10+ end-to-end scenarios + 5 stress tests
+- **Total Target**: 100+ integration tests, all green before Phase 1 PR merge
 
 ---
 
