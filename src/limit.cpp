@@ -5,7 +5,6 @@
 #include "limit.h"
 #include "debug.h"
 #include "event.h"
-#include "scheduler.h"
 // ---------------------------------------------
 //
 //            LimitType Class
@@ -219,35 +218,25 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
         _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
       }
     }
-    // AQUÍ ES DONDE OCURRÍA EL ERROR
     else if(_limit_properties.getAutoRelease() &&
             EvseState::Disabled == config_default_state() &&
             !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
     {
-      // --- CORRECCIÓN INICIO ---
-      // Antes de reclamar "Active", preguntamos al Scheduler.
-      
-      bool allowed_by_scheduler = true;
-
-      // Si el programador está activado...
-      if (scheduler.is_enabled()) {
-          // ...y NO estamos en la ventana de tiempo activa...
-          if (!scheduler.isActive()) {
-              // ...entonces el Scheduler manda: NO activar carga todavía.
-              allowed_by_scheduler = false; 
-              DBUGLN("Limit waiting for Scheduler window");
-          }
+      bool scheduler_blocks_charge = false;
+      if (_evse->clientHasClaim(EvseClient_OpenEVSE_Scheduler)) {
+        EvseState schedulerState = _evse->getClaimProperties(EvseClient_OpenEVSE_Scheduler).getState();
+        if (schedulerState != EvseState::Active) {
+          scheduler_blocks_charge = true;
+          DBUGLN("Limit: Scheduler is forcing sleep, respecting priority.");
+        }
       }
-
-      if (allowed_by_scheduler) {
-          // Solo si el horario lo permite, lanzamos el reclamo para activar
+      if (!scheduler_blocks_charge) {
           DBUGLN("Claiming EVSE due to default state");
           EvseProperties props;
           props.setState(EvseState::Active);
           props.setAutoRelease(true);
           _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
       }
-      // --- CORRECCIÓN FIN ---
     }
   }
   else
