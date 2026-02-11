@@ -190,7 +190,7 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
   {
     LimitType type = _limit_properties.getType();
     uint32_t value = _limit_properties.getValue();
-    bool auto_release = _limit_properties.getAutoRelease();
+    bool auto_release = _limit_properties.getAutoRelease(); // Variable no usada en el original, pero la mantenemos
 
     if(_evse->isCharging())
     {
@@ -218,16 +218,35 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
         _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
       }
     }
+    // AQUÍ ES DONDE OCURRÍA EL ERROR
     else if(_limit_properties.getAutoRelease() &&
             EvseState::Disabled == config_default_state() &&
             !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
     {
-      // The default state is disabled, so we need to make a claim to enable charging
-      DBUGLN("Claiming EVSE due to default state");
-      EvseProperties props;
-      props.setState(EvseState::Active);
-      props.setAutoRelease(true);
-      _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
+      // --- CORRECCIÓN INICIO ---
+      // Antes de reclamar "Active", preguntamos al Scheduler.
+      
+      bool allowed_by_scheduler = true;
+
+      // Si el programador está activado...
+      if (scheduler.is_enabled()) {
+          // ...y NO estamos en la ventana de tiempo activa...
+          if (!scheduler.isActive()) {
+              // ...entonces el Scheduler manda: NO activar carga todavía.
+              allowed_by_scheduler = false; 
+              DBUGLN("Limit waiting for Scheduler window");
+          }
+      }
+
+      if (allowed_by_scheduler) {
+          // Solo si el horario lo permite, lanzamos el reclamo para activar
+          DBUGLN("Claiming EVSE due to default state");
+          EvseProperties props;
+          props.setState(EvseState::Active);
+          props.setAutoRelease(true);
+          _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
+      }
+      // --- CORRECCIÓN FIN ---
     }
   }
   else
@@ -239,7 +258,6 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
   }
   return EVSE_LIMIT_LOOP_TIME;
 };
-
 bool Limit::limitTime(uint32_t val) {
   uint32_t elapsed = (uint32_t)_evse->getSessionElapsed()/60;
   if ( val > 0 && elapsed >= val ) {
