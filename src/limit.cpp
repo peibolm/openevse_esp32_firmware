@@ -5,6 +5,7 @@
 #include "limit.h"
 #include "debug.h"
 #include "event.h"
+#include "scheduler.h"
 // ---------------------------------------------
 //
 //            LimitType Class
