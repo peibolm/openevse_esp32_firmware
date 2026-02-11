@@ -223,12 +223,12 @@ else if(_limit_properties.getAutoRelease() &&
             !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
     {
       bool scheduler_blocks_charge = false;
-      if (_evse->clientHasClaim(EvseClient_OpenEVSE_Timer)) 
+      if (_evse->clientHasClaim(EvseClient_OpenEVSE_Schedule)) 
       {
-          EvseState schedState = _evse->getClaimProperties(EvseClient_OpenEVSE_Timer).getState();
+          EvseState schedState = _evse->getClaimProperties(EvseClient_OpenEVSE_Schedule).getState();
           if (schedState != EvseState::Active) {
               scheduler_blocks_charge = true;
-              DBUGLN("Limit: Timer/Scheduler is preventing charge.");
+              DBUGLN("Limit: Schedule is preventing charge.");
           }
       }
 
