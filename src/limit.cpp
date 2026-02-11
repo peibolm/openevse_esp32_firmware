@@ -5,6 +5,7 @@
 #include "limit.h"
 #include "debug.h"
 #include "event.h"
+#include "scheduler.h"
 // ---------------------------------------------
 //
 //            LimitType Class
@@ -190,7 +191,7 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
   {
     LimitType type = _limit_properties.getType();
     uint32_t value = _limit_properties.getValue();
-    bool auto_release = _limit_properties.getAutoRelease();
+    bool auto_release = _limit_properties.getAutoRelease(); // Variable no usada en el original, pero la mantenemos
 
     if(_evse->isCharging())
     {
@@ -222,12 +223,20 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
             EvseState::Disabled == config_default_state() &&
             !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
     {
-      // The default state is disabled, so we need to make a claim to enable charging
-      DBUGLN("Claiming EVSE due to default state");
-      EvseProperties props;
-      props.setState(EvseState::Active);
-      props.setAutoRelease(true);
-      _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
+      bool allowed_by_scheduler = true;
+      if (scheduler.is_enabled()) {
+          if (!scheduler.isActive()) {
+              allowed_by_scheduler = false; 
+              DBUGLN("Limit waiting for Scheduler window");
+          }
+      }
+      if (allowed_by_scheduler) {
+          DBUGLN("Claiming EVSE due to default state");
+          EvseProperties props;
+          props.setState(EvseState::Active);
+          props.setAutoRelease(true);
+          _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
+      }
     }
   }
   else
