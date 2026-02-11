@@ -5,7 +5,6 @@
 #include "limit.h"
 #include "debug.h"
 #include "event.h"
-#include "scheduler.h"
 // ---------------------------------------------
 //
 //            LimitType Class
@@ -219,18 +218,20 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
         _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
       }
     }
-    else if(_limit_properties.getAutoRelease() &&
+else if(_limit_properties.getAutoRelease() &&
             EvseState::Disabled == config_default_state() &&
             !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
     {
       bool scheduler_blocks_charge = false;
-      if (_evse->clientHasClaim(EvseClient_OpenEVSE_Scheduler)) {
-        EvseState schedulerState = _evse->getClaimProperties(EvseClient_OpenEVSE_Scheduler).getState();
-        if (schedulerState != EvseState::Active) {
-          scheduler_blocks_charge = true;
-          DBUGLN("Limit: Scheduler is forcing sleep, respecting priority.");
-        }
+      if (_evse->clientHasClaim(EvseClient_OpenEVSE_Timer)) 
+      {
+          EvseState schedState = _evse->getClaimProperties(EvseClient_OpenEVSE_Timer).getState();
+          if (schedState != EvseState::Active) {
+              scheduler_blocks_charge = true;
+              DBUGLN("Limit: Timer/Scheduler is preventing charge.");
+          }
       }
+
       if (!scheduler_blocks_charge) {
           DBUGLN("Claiming EVSE due to default state");
           EvseProperties props;
