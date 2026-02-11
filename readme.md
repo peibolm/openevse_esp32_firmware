@@ -78,4 +78,4 @@ Contributions by:
 
 ## Licence
 
-GNU General Public License (GPL) V3
+GNU General Public License (GPL) V3 
