@@ -144,7 +144,7 @@ void Limit::begin(EvseManager &evse) {
 
 unsigned long Limit::loop(MicroTasks::WakeReason reason)
 {
-  // Seguridad: Si _evse es nulo por alguna razón, salir para evitar crash
+  // Seguridad anti-crash
   if (!_evse) return EVSE_LIMIT_LOOP_TIME;
 
   DBUG("Limit woke: ");
@@ -169,27 +169,27 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
   {
     LimitType type = _limit_properties.getType();
     uint32_t value = _limit_properties.getValue();
+    bool limit_reached = false;
     
+    switch (type) {
+      case LimitType::Time:
+        limit_reached = limitTime(value);
+        break;
+      case LimitType::Energy:
+        limit_reached = limitEnergy(value);
+        break;
+      case LimitType::Soc:
+        limit_reached = limitSoc(value);
+        break;
+      case LimitType::Range:
+        limit_reached = limitRange(value);
+        break;
+      default:
+        break;
+    }
+
     if(_evse->isCharging())
     {
-      bool limit_reached = false;
-      switch (type) {
-        case LimitType::Time:
-          limit_reached = limitTime(value);
-          break;
-        case LimitType::Energy:
-          limit_reached = limitEnergy(value);
-          break;
-        case LimitType::Soc:
-          limit_reached = limitSoc(value);
-          break;
-        case LimitType::Range:
-          limit_reached = limitRange(value);
-          break;
-        default:
-          break;
-      }
-
       if (limit_reached) {
         DBUGLN("Limit has expired, disable evse");
         EvseProperties props;
@@ -198,27 +198,46 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
         _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
       }
     }
-    else if(_limit_properties.getAutoRelease() &&
-            EvseState::Disabled == config_default_state() &&
-            !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
-    {
-      bool schedule_blocks_charge = false;
+    else 
+    {      
+      bool should_attempt_start = false;
 
-      if (_evse->clientHasClaim(EvseClient_OpenEVSE_Schedule)) 
+      if (_limit_properties.getAutoRelease() &&
+          EvseState::Disabled == config_default_state() &&
+          !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit)) 
       {
-          EvseState schedState = _evse->getClaimProperties(EvseClient_OpenEVSE_Schedule).getState();
-          
-          if (schedState != EvseState::Active) {
-              schedule_blocks_charge = true;
+          should_attempt_start = true;
+      }
+
+      else if (_evse->clientHasClaim(EvseClient_OpenEVSE_Limit)) 
+      {
+          EvseState myState = _evse->getClaimProperties(EvseClient_OpenEVSE_Limit).getState();
+          if (myState == EvseState::Disabled && !limit_reached) {
+             should_attempt_start = true;
+             DBUGLN("Limit increased by user, attempting restart...");
           }
       }
 
-      if (!schedule_blocks_charge) {
-          DBUGLN("Claiming EVSE due to default state");
-          EvseProperties props;
-          props.setState(EvseState::Active);
-          props.setAutoRelease(true);
-          _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
+      if (should_attempt_start) 
+      {
+        bool schedule_blocks_charge = false;
+
+        if (_evse->clientHasClaim(EvseClient_OpenEVSE_Schedule)) 
+        {
+            EvseState schedState = _evse->getClaimProperties(EvseClient_OpenEVSE_Schedule).getState();
+            if (schedState != EvseState::Active) {
+                schedule_blocks_charge = true;
+                // DBUGLN("Limit: Schedule prevents restart.");
+            }
+        }
+
+        if (!schedule_blocks_charge) {
+            DBUGLN("Claiming EVSE Active (Start/Restart)");
+            EvseProperties props;
+            props.setState(EvseState::Active);
+            props.setAutoRelease(true);
+            _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
+        }
       }
     }
   }
