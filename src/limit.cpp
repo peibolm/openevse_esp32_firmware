@@ -5,47 +5,32 @@
 #include "limit.h"
 #include "debug.h"
 #include "event.h"
+
 // ---------------------------------------------
-//
-//            LimitType Class
-//
-//----------------------------------------------
+//             LimitType Class
+// ---------------------------------------------
 
 uint8_t LimitType::fromString(const char *value)
 {
   // Cheat a bit and just check the first char
   switch (value[0]) {
-    // None
-    case ('n'):
-      _value = LimitType::None;
-      break;
-    //Time
-    case ('t'):
-      _value = LimitType::Time;
-      break;
-    //Energy
-    case ('e'):
-      _value = LimitType::Energy;
-      break;
-    //Soc
-    case ('s'):
-      _value = LimitType::Soc;
-      break;
-    //Range
-    case ('r'):
-      _value = LimitType::Range;
-      break;
+    case ('n'): _value = LimitType::None; break;
+    case ('t'): _value = LimitType::Time; break;
+    case ('e'): _value = LimitType::Energy; break;
+    case ('s'): _value = LimitType::Soc; break;
+    case ('r'): _value = LimitType::Range; break;
   }
-return _value;
+  return _value;
 }
+
 const char *LimitType::toString()
 {
-	return  LimitType::None == _value ? "none" :
-			LimitType::Time == _value ? "time" :
-			LimitType::Energy == _value ? "energy" :
-			LimitType::Soc == _value ? "soc" :
-			LimitType::Range == _value ? "range" :
-			"none";
+  return LimitType::None == _value ? "none" :
+         LimitType::Time == _value ? "time" :
+         LimitType::Energy == _value ? "energy" :
+         LimitType::Soc == _value ? "soc" :
+         LimitType::Range == _value ? "range" :
+         "none";
 }
 
 LimitType LimitType::operator= (const Value val) {
@@ -54,10 +39,8 @@ LimitType LimitType::operator= (const Value val) {
 }
 
 // ---------------------------------------------
-//
-//            LimitProperties Class
-//
-//----------------------------------------------
+//             LimitProperties Class
+// ---------------------------------------------
 LimitProperties::LimitProperties()
 {
   _type = LimitType::None;
@@ -109,20 +92,18 @@ bool LimitProperties::deserialize(JsonObject &obj)
 {
   if(obj.containsKey("type")) {
     _type.fromString(obj["type"]);
-    }
+  }
   if(obj.containsKey("value")) {
     _value = obj["value"];
-    }
+  }
   if(obj.containsKey("auto_release")) {
     _auto_release = obj["auto_release"];
-    }
+  }
   return _type > 0 && _value > 0;
-
 };
 
 bool LimitProperties::serialize(JsonObject &obj)
 {
-
   obj["type"] = _type.toString();
   obj["value"] = _value;
   obj["auto_release"] = _auto_release;
@@ -130,10 +111,8 @@ bool LimitProperties::serialize(JsonObject &obj)
 };
 
 // ---------------------------------------------
-//
-//            Limit Class
-//
-//----------------------------------------------
+//             Limit Class
+// ---------------------------------------------
 
 //global instance
 Limit limit;
@@ -146,17 +125,16 @@ Limit::Limit() :
   _limit_properties.init();
 }
 
-
 Limit::~Limit() {
-  _evse->release(EvseClient_OpenEVSE_Limit);
+  if (_evse) {
+     _evse->release(EvseClient_OpenEVSE_Limit);
+  }
 };
 
 void Limit::setup() {
-
 };
 
 void Limit::begin(EvseManager &evse) {
-  // todo get saved default limit
   DBUGLN("Starting Limit task");
   this->_evse = &evse;
   setDefaultLimit(limit_default_type.c_str(), limit_default_value);
@@ -166,6 +144,9 @@ void Limit::begin(EvseManager &evse) {
 
 unsigned long Limit::loop(MicroTasks::WakeReason reason)
 {
+  // Seguridad: Si _evse es nulo por alguna razón, salir para evitar crash
+  if (!_evse) return EVSE_LIMIT_LOOP_TIME;
+
   DBUG("Limit woke: ");
   DBUGLN(WakeReason_Scheduled == reason ? "WakeReason_Scheduled" :
          WakeReason_Event == reason ? "WakeReason_Event" :
@@ -176,8 +157,6 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
   if(_sessionCompleteListener.IsTriggered())
   {
     DBUGLN("Session complete, clearing limit");
-
-    // disable claim if it has not been deleted already
     if (_evse->clientHasClaim(EvseClient_OpenEVSE_Limit)) {
       _evse->release(EvseClient_OpenEVSE_Limit);
     }
@@ -190,8 +169,7 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
   {
     LimitType type = _limit_properties.getType();
     uint32_t value = _limit_properties.getValue();
-    bool auto_release = _limit_properties.getAutoRelease(); // Variable no usada en el original, pero la mantenemos
-
+    
     if(_evse->isCharging())
     {
       bool limit_reached = false;
@@ -208,9 +186,11 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
         case LimitType::Range:
           limit_reached = limitRange(value);
           break;
+        default:
+          break;
       }
+
       if (limit_reached) {
-        // Limit reached, disabling EVSE
         DBUGLN("Limit has expired, disable evse");
         EvseProperties props;
         props.setState(EvseState::Disabled);
@@ -218,21 +198,28 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
         _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
       }
     }
-else if(_limit_properties.getAutoRelease() &&
+    // AQUÍ ESTABA EL CAMBIO CRÍTICO
+    else if(_limit_properties.getAutoRelease() &&
             EvseState::Disabled == config_default_state() &&
             !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
     {
-      bool scheduler_blocks_charge = false;
+      bool schedule_blocks_charge = false;
+
+      // Verificamos si el Schedule (Timer) tiene una opinión activa
       if (_evse->clientHasClaim(EvseClient_OpenEVSE_Schedule)) 
       {
           EvseState schedState = _evse->getClaimProperties(EvseClient_OpenEVSE_Schedule).getState();
+          
+          // Si el horario NO es Active (es decir, es Sleep o Disabled), bloqueamos la carga
           if (schedState != EvseState::Active) {
-              scheduler_blocks_charge = true;
-              DBUGLN("Limit: Schedule is preventing charge.");
+              schedule_blocks_charge = true;
+              // IMPORTANTE: Comentamos este log para evitar inundar el puerto serie y causar reinicios
+              // DBUGLN("Limit: Schedule is preventing charge."); 
           }
       }
 
-      if (!scheduler_blocks_charge) {
+      // Solo si el horario lo permite, activamos la carga
+      if (!schedule_blocks_charge) {
           DBUGLN("Claiming EVSE due to default state");
           EvseProperties props;
           props.setState(EvseState::Active);
@@ -244,60 +231,47 @@ else if(_limit_properties.getAutoRelease() &&
   else
   {
     if (_evse->clientHasClaim(EvseClient_OpenEVSE_Limit)) {
-      //remove claim if limit has been deleted
       _evse->release(EvseClient_OpenEVSE_Limit);
     }
   }
   return EVSE_LIMIT_LOOP_TIME;
 };
+
 bool Limit::limitTime(uint32_t val) {
   uint32_t elapsed = (uint32_t)_evse->getSessionElapsed()/60;
   if ( val > 0 && elapsed >= val ) {
-    // Time limit done
     DBUGLN("Time limit reached");
-    DBUGVAR(val);
-    DBUGVAR(elapsed);
     return true;
   }
-  else return false;
+  return false;
 };
 
 bool Limit::limitEnergy(uint32_t val) {
   uint32_t elapsed = _evse->getSessionEnergy();
   if ( val > 0 && elapsed >= val ) {
-    // Energy limit done
     DBUGLN("Energy limit reached");
-    DBUGVAR(val);
-    DBUGVAR(elapsed);
     return true;
   }
-  else return false;
+  return false;
 };
 
 bool Limit::limitSoc(uint32_t val) {
   uint32_t soc = _evse->getVehicleStateOfCharge();
   if ( val > 0  && soc >= val ) {
-    // SOC limit done
     DBUGLN("SOC limit reached");
-    DBUGVAR(val);
-    DBUGVAR(soc);
     return true;
   }
-  else return false;
+  return false;
 };
 
 bool Limit::limitRange(uint32_t val) {
   uint32_t rng = _evse->getVehicleRange();
   if ( val > 0  && rng >= val ) {
-    // Range limit done
     DBUGLN("Range limit reached");
-    DBUGVAR(val);
-    DBUGVAR(rng);
     return true;
   }
-  else return false;
+  return false;
 };
-
 
 bool Limit::hasLimit() {
   return _limit_properties.getType() != LimitType::None;
@@ -322,7 +296,7 @@ bool Limit::set(LimitProperties props) {
 };
 
 LimitProperties Limit::get() {
-	return _limit_properties;
+  return _limit_properties;
 };
 
 bool Limit::clear() {
