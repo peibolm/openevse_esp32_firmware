@@ -198,27 +198,21 @@ unsigned long Limit::loop(MicroTasks::WakeReason reason)
         _evse->claim(EvseClient_OpenEVSE_Limit, EvseManager_Priority_Limit, props);
       }
     }
-    // AQUÍ ESTABA EL CAMBIO CRÍTICO
     else if(_limit_properties.getAutoRelease() &&
             EvseState::Disabled == config_default_state() &&
             !_evse->clientHasClaim(EvseClient_OpenEVSE_Limit))
     {
       bool schedule_blocks_charge = false;
 
-      // Verificamos si el Schedule (Timer) tiene una opinión activa
       if (_evse->clientHasClaim(EvseClient_OpenEVSE_Schedule)) 
       {
           EvseState schedState = _evse->getClaimProperties(EvseClient_OpenEVSE_Schedule).getState();
           
-          // Si el horario NO es Active (es decir, es Sleep o Disabled), bloqueamos la carga
           if (schedState != EvseState::Active) {
               schedule_blocks_charge = true;
-              // IMPORTANTE: Comentamos este log para evitar inundar el puerto serie y causar reinicios
-              // DBUGLN("Limit: Schedule is preventing charge."); 
           }
       }
 
-      // Solo si el horario lo permite, activamos la carga
       if (!schedule_blocks_charge) {
           DBUGLN("Claiming EVSE due to default state");
           EvseProperties props;
