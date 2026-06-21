@@ -3,7 +3,7 @@
 
 // Time between loop polls
 #ifndef EVSE_SHAPER_LOOP_TIME
-#define EVSE_SHAPER_LOOP_TIME 4000
+#define EVSE_SHAPER_LOOP_TIME 2000
 #endif
 
 #ifndef EVSE_SHAPER_MIN_FILTER
@@ -11,7 +11,7 @@
 #endif
 
 #ifndef EVSE_SHAPER_HYSTERESIS
-#define EVSE_SHAPER_HYSTERESIS 1.0 // A
+#define EVSE_SHAPER_HYSTERESIS 0.5 // A
 #endif
 
 #include "emonesp.h"
