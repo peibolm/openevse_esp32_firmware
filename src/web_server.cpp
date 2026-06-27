@@ -85,8 +85,13 @@ void handleUpdateRequest(MongooseHttpServerRequest *request);
 size_t handleUpdateUpload(MongooseHttpServerRequest *request, int ev, MongooseString filename, uint64_t index, uint8_t *data, size_t len);
 void handleUpdateClose(MongooseHttpServerRequest *request);
 
+void handleMigrateExpand16mb(MongooseHttpServerRequest *request);
+void handleMigrateStatus(MongooseHttpServerRequest *request);
+void handleMigrateCoredump(MongooseHttpServerRequest *request);
+
 void handleTime(MongooseHttpServerRequest *request);
 void handleTimePost(MongooseHttpServerRequest *request, MongooseHttpServerResponseStream *response);
+void handleMqttAction(MongooseHttpServerRequest *request);
 
 #ifndef ENABLE_TSDB
 void handleEnergyRaw(MongooseHttpServerRequest *request);
@@ -237,6 +242,19 @@ void buildStatus(DynamicJsonDocument &doc) {
   doc["packets_success"] = packets_success;
 
   doc["mqtt_connected"] = (int)mqtt.isConnected();
+  doc["mqtt_status"]    = mqtt.getMqttStatus();
+  if (mqtt.getBrokerIp()[0] != '\0')
+    doc["mqtt_broker_ip"]      = mqtt.getBrokerIp();
+  if (mqtt.getBrokerVersion()[0] != '\0')
+    doc["mqtt_broker_version"] = mqtt.getBrokerVersion();
+  if (mqtt.getConnectedSince() > 0)
+    doc["mqtt_connected_since"] = (uint32_t)mqtt.getConnectedSince();
+  if (mqtt.getLastRxTime() > 0)
+    doc["mqtt_last_rx"]         = (uint32_t)mqtt.getLastRxTime();
+  if (mqtt.getErrorCategory()[0] != '\0') {
+    doc["mqtt_error"]        = mqtt.getErrorCategory();
+    doc["mqtt_error_detail"] = mqtt.getErrorDetail();
+  }
 
   doc["ocpp_connected"] = (int)OcppTask::isConnected();
 
@@ -317,11 +335,8 @@ void buildStatus(DynamicJsonDocument &doc) {
 }
 
 // -------------------------------------------------------------------
-// Wifi scan /scan not currently used
+// Wifi scan
 // url: /scan
-//
-// First request will return 0 results unless you start scan from somewhere else (loop/setup)
-// Do not request more often than 3-5 seconds
 // -------------------------------------------------------------------
 void
 handleScan(MongooseHttpServerRequest *request) {
@@ -331,23 +346,28 @@ handleScan(MongooseHttpServerRequest *request) {
   }
 
   DBUGF("Starting WiFi scan");
-  net.wifiScanNetworks([request, response](int networksFound) {
+  bool scanStarted = net.wifiScanNetworks([request, response](int networksFound) {
     DBUGF("%d networks found", networksFound);
-    String json = "[";
+    response->print("[");
     for (int i = 0; i < networksFound; ++i) {
-      if(i) json += ",";
-      json += "{";
-      json += "\"rssi\":"+String(WiFi.RSSI(i));
-      json += ",\"ssid\":\""+WiFi.SSID(i)+"\"";
-      json += ",\"bssid\":\""+WiFi.BSSIDstr(i)+"\"";
-      json += ",\"channel\":"+String(WiFi.channel(i));
-      json += ",\"secure\":"+String(WiFi.encryptionType(i));
-      json += "}";
+      if(i) response->print(",");
+      StaticJsonDocument<256> network;
+      network["rssi"] = WiFi.RSSI(i);
+      network["ssid"] = WiFi.SSID(i);
+      network["bssid"] = WiFi.BSSIDstr(i);
+      network["channel"] = WiFi.channel(i);
+      network["secure"] = WiFi.encryptionType(i);
+      serializeJson(network, *response);
     }
-    json += "]";
-    response->print(json);
+    response->print("]");
     request->send(response);
   });
+
+  if(!scanStarted) {
+    DBUGLN("WiFi scan failed to start");
+    response->print("[]");
+    request->send(response);
+  }
 }
 
 // -------------------------------------------------------------------
@@ -1225,6 +1245,39 @@ void web_server_send_ascii_utf8(const char *endpoint, const uint8_t *buffer, siz
   server.sendAll(endpoint, WEBSOCKET_OP_TEXT, temp, size);
 }
 
+void handleMqttAction(MongooseHttpServerRequest *request) {
+  MongooseHttpServerResponseStream *response;
+  if (false == requestPreProcess(request, response)) return;
+
+  if (HTTP_GET == request->method()) {
+    DynamicJsonDocument doc(JSON_OBJECT_SIZE(8) + 384);
+    doc["mqtt_connected"] = (int)mqtt.isConnected();
+    doc["mqtt_status"]    = mqtt.getMqttStatus();
+    if (mqtt.getBrokerIp()[0] != '\0')
+      doc["mqtt_broker_ip"]      = mqtt.getBrokerIp();
+    if (mqtt.getBrokerVersion()[0] != '\0')
+      doc["mqtt_broker_version"] = mqtt.getBrokerVersion();
+    if (mqtt.getConnectedSince() > 0)
+      doc["mqtt_connected_since"] = (uint32_t)mqtt.getConnectedSince();
+    if (mqtt.getLastRxTime() > 0)
+      doc["mqtt_last_rx"]         = (uint32_t)mqtt.getLastRxTime();
+    // Always include error fields (empty string when no failure) so the GUI can
+    // clear a previously-shown reason once reconnected.
+    doc["mqtt_error"]        = mqtt.getErrorCategory();
+    doc["mqtt_error_detail"] = mqtt.getErrorDetail();
+    response->setCode(200);
+    serializeJson(doc, *response);
+  } else if (HTTP_POST == request->method()) {
+    mqtt.restartConnection();
+    response->setCode(200);
+    response->print("{\"msg\":\"done\"}");
+  } else {
+    response->setCode(405);
+    response->print("{\"msg\":\"Method not allowed\"}");
+  }
+  request->send(response);
+}
+
 void web_server_setup()
 {
   bool use_ssl = false;
@@ -1235,16 +1288,18 @@ void web_server_setup()
     const char *key = certs.getKey(cert_id);
     if(NULL != cert && NULL != key)
     {
-      server.begin(443, cert, key);
+      DEBUG.printf("Starting HTTPS server, https://0.0.0.0:%d\n", www_https_port);
+      server.begin(www_https_port, cert, key);
       use_ssl = true;
 
-      redirect.begin(80);
+      redirect.begin(www_http_port);
       redirect.on("/", handleHttpsRedirect);
     }
   }
 
   if(false == use_ssl) {
-    server.begin(80);
+    DEBUG.printf("Starting HTTP server, http://0.0.0.0:%d\n", www_http_port);
+    server.begin(www_http_port);
   }
 
   // Handle status updates
@@ -1279,6 +1334,7 @@ void web_server_setup()
   server.on("/limit", handleLimit);
   server.on("/emeter", handleEmeter);
   server.on("/time", handleTime);
+  server.on("/mqtt$", handleMqttAction);
 
 #ifndef ENABLE_TSDB
   server.on("/energy/raw$", handleEnergyRaw);
@@ -1298,6 +1354,11 @@ void web_server_setup()
     onRequest(handleUpdateRequest)->
     onUpload(handleUpdateUpload)->
     onClose(handleUpdateClose);
+
+  // In-place 16MB flash repartition (16MB module flashed with 4MB layout)
+  server.on("/migrate/expand16mb$", handleMigrateExpand16mb);
+  server.on("/migrate/status$", handleMigrateStatus);
+  server.on("/migrate/coredump$", handleMigrateCoredump);
 
   server.on("/debug$", [](MongooseHttpServerRequest *request) {
     MongooseHttpServerResponseStream *response;
