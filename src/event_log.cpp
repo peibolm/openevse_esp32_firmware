@@ -77,7 +77,7 @@ void EventLog::begin()
   }
 }
 
-void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, uint32_t evseFlags, uint32_t pilot, double energy, uint32_t elapsed, double temperature, double temperatureMax, uint8_t divertMode, uint8_t shaper)
+void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, uint32_t evseFlags, uint32_t pilot, double energy, uint32_t elapsed, double temperature, double temperatureMax, uint8_t divertMode, uint8_t shaper, String stateReason)
 {
   time_t now = time(NULL);
   struct tm timeinfo;
@@ -120,7 +120,11 @@ void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, ui
 
     line["t"] = output;
     line["ty"] = type.toInt();
-    line["ms"] = managerState.toString();
+    String stateStr = managerState.toString();
+    if (stateReason.length() > 0) {
+      stateStr = stateStr + " (" + stateReason + ")";
+    }
+    line["ms"] = stateStr;
     line["es"] = evseState;
     line["ef"] = evseFlags;
     line["p"] = pilot;

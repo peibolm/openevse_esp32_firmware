@@ -350,8 +350,20 @@ unsigned long EvseManager::loop(MicroTasks::WakeReason reason)
   {
       _evaluateTargetState = true;
 
+    // --- Determinar el motivo del cambio de estado ---
+    String reason = "";
+    EvseState current_state = getState();
+    
+    // Si no estamos activos y hay un cliente asignado, identificamos quién es
+    if (current_state != EvseState::Active && current_state != EvseState::None && _state_client != EvseClient_NULL) {
+      if (_state_client == EvseClient_OpenEVSE_Manual) reason = "Manual";
+      else if (_state_client == EvseClient_OpenEVSE_Schedule) reason = "Schedule";
+      else if (_state_client == EvseClient_OpenEVSE_Shaper) reason = "Shaper";
+      else if (_state_client == EvseClient_OpenEVSE_Limit) reason = "Limit";
+    }
+
     _eventLog.log(_monitor.isError() ? EventType::Warning : EventType::Information,
-                  getState(),
+                  current_state,
                   _monitor.getEvseState(),
                   _monitor.getFlags(),
                   _monitor.getPilot(),
@@ -360,7 +372,8 @@ unsigned long EvseManager::loop(MicroTasks::WakeReason reason)
                   _monitor.getTemperature(EVSE_MONITOR_TEMP_MONITOR),
                   _monitor.getTemperature(EVSE_MONITOR_TEMP_MAX),
                   divert.isActive(),
-                  shaper.getState()
+                  shaper.getState(),
+                  reason // Pasamos el motivo al log
                   );
   }
 
