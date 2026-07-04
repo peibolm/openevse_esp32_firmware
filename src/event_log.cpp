@@ -120,11 +120,7 @@ void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, ui
 
     line["t"] = output;
     line["ty"] = type.toInt();
-    String stateStr = managerState.toString();
-    if (stateReason.length() > 0) {
-      stateStr = stateStr + " (" + stateReason + ")";
-    }
-    line["ms"] = stateStr;
+    line["ms"] = managerState.toString();
     line["es"] = evseState;
     line["ef"] = evseFlags;
     line["p"] = pilot;
@@ -134,7 +130,9 @@ void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, ui
     line["tm"] = temperatureMax;
     line["dm"] = divertMode;
     line["sh"] = shaper;
-
+    if (stateReason.length() > 0) {
+      line["rsn"] = stateReason;
+    }
     serializeJson(line, eventFile);
     eventFile.println("");
 
