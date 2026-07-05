@@ -26,7 +26,7 @@ jobs:
         with:
           submodules: recursive
           ref: ${{ github.head_ref }}
-          token: ${{ secrets.DEPENDABOT_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache pip
         uses: actions/cache@v6
