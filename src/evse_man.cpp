@@ -14,6 +14,25 @@
 
 static EvseProperties nullProperties;
 
+// Short, stable machine-readable codes for the history log's "reason" field.
+// The GUI translates these via i18n, so they must not change without a
+// corresponding update on that side.
+static String reasonCodeForClient(EvseClient client)
+{
+  if (client == EvseClient_OpenEVSE_Manual) return "manual";
+  if (client == EvseClient_OpenEVSE_Schedule) return "schedule";
+  if (client == EvseClient_OpenEVSE_Shaper) return "shaper";
+  if (client == EvseClient_OpenEVSE_Limit) return "limit";
+  if (client == EvseClient_OpenEVSE_Divert) return "divert";
+  if (client == EvseClient_OpenEVSE_RFID) return "rfid";
+  if (client == EvseClient_OpenEVSE_MQTT) return "mqtt";
+  if (client == EvseClient_OpenEVSE_OCPP) return "ocpp";
+  if (client == EvseClient_OpenEVSE_TempThrottle) return "temp_throttle";
+  if (client == EvseClient_OpenEVSE_Boost) return "boost";
+  if (client == EvseClient_OpenEVSE_Ohm) return "ohm";
+  return "";
+}
+
 EvseProperties::EvseProperties() :
   _state(EvseState::None),
   _charge_current(UINT32_MAX),
@@ -350,16 +369,18 @@ unsigned long EvseManager::loop(MicroTasks::WakeReason reason)
   {
       _evaluateTargetState = true;
 
-    // --- Determinar el motivo del cambio de estado ---
+    // Work out why we stopped/paused, so the history log can show it.
+    // A hardware/comms error is more informative than a stale claim, so it
+    // takes priority over whichever client currently holds the state claim.
     String reason = "";
     EvseState current_state = getState();
-    
-    // Si no estamos activos y hay un cliente asignado, identificamos quién es
-    if (current_state != EvseState::Active && current_state != EvseState::None && _state_client != EvseClient_NULL) {
-      if (_state_client == EvseClient_OpenEVSE_Manual) reason = "Manual";
-      else if (_state_client == EvseClient_OpenEVSE_Schedule) reason = "Schedule";
-      else if (_state_client == EvseClient_OpenEVSE_Shaper) reason = "Shaper";
-      else if (_state_client == EvseClient_OpenEVSE_Limit) reason = "Limit";
+
+    if (current_state != EvseState::Active && current_state != EvseState::None) {
+      if (_monitor.isError()) {
+        reason = "error";
+      } else if (_state_client != EvseClient_NULL) {
+        reason = reasonCodeForClient(_state_client);
+      }
     }
 
     _eventLog.log(_monitor.isError() ? EventType::Warning : EventType::Information,
@@ -373,7 +394,7 @@ unsigned long EvseManager::loop(MicroTasks::WakeReason reason)
                   _monitor.getTemperature(EVSE_MONITOR_TEMP_MAX),
                   divert.isActive(),
                   shaper.getState(),
-                  reason // Pasamos el motivo al log
+                  reason
                   );
   }
 

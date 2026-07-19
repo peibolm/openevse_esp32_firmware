@@ -14,8 +14,11 @@
 #define ENERGY_LOGGER_DAILY_DIR        "/logs/daily"
 #define ENERGY_LOGGER_RAW_DIR          "/logs/raw"
 #define ENERGY_LOGGER_RAW_SAVE_HOURS   3       // write a raw chunk file every 3 h
-#define ENERGY_LOGGER_RAW_KEEP_HOURS   6       // keep 6 h = 2 files (~18 KB)
-#define ENERGY_LOGGER_DAILY_MAX_QTRS   2       // keep 2 quarterly files = 6 months (~6 KB)
+// LittleFS allocates a full 4 KB block per file no matter how small its content
+// is, so each extra raw/quarterly file costs a full block. Keep just the
+// current chunk/quarter on disk rather than a rolling window of several.
+#define ENERGY_LOGGER_RAW_KEEP_HOURS   3       // keep 1 file (current chunk, ~4 KB block)
+#define ENERGY_LOGGER_DAILY_MAX_QTRS   1       // keep 1 quarterly file (~4 KB block)
 #define ENERGY_LOGGER_MAX_BYTES        20480   // hard cap for all /logs files (~20 KB)
 #define ENERGY_LOGGER_MONTHLY_DIR      "/logs/monthly"
 #define ENERGY_LOGGER_ANNUAL_FILE      "/logs/annual.json"

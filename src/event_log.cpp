@@ -70,6 +70,15 @@ void EventLog::begin()
     if(UINT32_MAX == _min_log_index) {
       _min_log_index = 0;
     }
+
+    // A firmware update can lower EVENTLOG_MAX_ROTATE_COUNT (e.g. after a block-size
+    // tuning change). log() only prunes down to the limit as part of rotating into a
+    // new file, which can't happen while LittleFS is already full — so prune here too,
+    // once at boot, to reclaim the excess blocks immediately.
+    while((_max_log_index + 1) - _min_log_index > EVENTLOG_MAX_ROTATE_COUNT) {
+      LittleFS.remove(filenameFromIndex(_min_log_index));
+      _min_log_index++;
+    }
   }
   else
   {
@@ -114,7 +123,12 @@ void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, ui
 
   if(eventFile)
   {
-    StaticJsonDocument<256> line;
+    // 13 keys alone cost ~208 B of variant-pool space in ArduinoJson v6 (16 B/slot),
+    // leaving almost nothing in a 256 B document for the duplicated string values
+    // (timestamp, reason) — that overflow was silent because the write path never
+    // checked serializeJson()'s return value, so a corrupted/truncated line looked
+    // like a success. 512 B leaves comfortable headroom.
+    StaticJsonDocument<512> line;
     char output[80];
     strftime(output, 80, "%FT%TZ", &timeinfo);
 
@@ -133,7 +147,12 @@ void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, ui
     if (stateReason.length() > 0) {
       line["rsn"] = stateReason;
     }
-    serializeJson(line, eventFile);
+
+    if (line.overflowed() || serializeJson(line, eventFile) == 0) {
+      DBUGLN("EventLog: Failed to serialize/write entry");
+      eventFile.close();
+      return;
+    }
     eventFile.println("");
 
     #ifdef ENABLE_DEBUG
@@ -145,7 +164,7 @@ void EventLog::log(EventType type, EvseState managerState, uint8_t evseState, ui
   }
 }
 
-void EventLog::enumerate(uint32_t index, std::function<void(String time, EventType type, const String &logEntry, EvseState managerState, uint8_t evseState, uint32_t evseFlags, uint32_t pilot, double energy, uint32_t elapsed, double temperature, double temperatureMax, uint8_t divertMode, uint8_t shaper)> callback)
+void EventLog::enumerate(uint32_t index, std::function<void(String time, EventType type, const String &logEntry, EvseState managerState, uint8_t evseState, uint32_t evseFlags, uint32_t pilot, double energy, uint32_t elapsed, double temperature, double temperatureMax, uint8_t divertMode, uint8_t shaper, const String &stateReason)> callback)
 {
   String filename = filenameFromIndex(index);
   File eventFile = LittleFS.open(filename);
@@ -156,7 +175,7 @@ void EventLog::enumerate(uint32_t index, std::function<void(String time, EventTy
       String line = eventFile.readStringUntil('\n');
       if(line.length() > 0)
       {
-        StaticJsonDocument<256> json;
+        StaticJsonDocument<512> json;
         DeserializationError error = deserializeJson(json, line);
         if(error)
         {
@@ -178,8 +197,9 @@ void EventLog::enumerate(uint32_t index, std::function<void(String time, EventTy
         double temperatureMax = json["tm"];
         uint8_t divertMode = json["dm"];
         uint8_t shaper = json["sh"];
+        String stateReason = json["rsn"] | "";
 
-        callback(time, type, line, managerState, evseState, evseFlags, pilot, energy, elapsed, temperature, temperatureMax, divertMode, shaper);
+        callback(time, type, line, managerState, evseState, evseFlags, pilot, energy, elapsed, temperature, temperatureMax, divertMode, shaper, stateReason);
       }
     }
     eventFile.close();

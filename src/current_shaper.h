@@ -6,12 +6,30 @@
 #define EVSE_SHAPER_LOOP_TIME 2000
 #endif
 
-#ifndef EVSE_SHAPER_MIN_FILTER
-#define EVSE_SHAPER_MIN_FILTER 10 // sec
-#endif
-
 #ifndef EVSE_SHAPER_HYSTERESIS
 #define EVSE_SHAPER_HYSTERESIS 0.5 // A
+#endif
+
+// How close the EV's measured current has to be to our last commanded current
+// before we trust it has finished ramping.
+#ifndef EVSE_SHAPER_SETTLE_TOLERANCE
+#define EVSE_SHAPER_SETTLE_TOLERANCE 1.0 // A
+#endif
+
+// Tau for smoothing the safety/pause decision only (independent of
+// current_shaper_smoothing_time, which governs the separate paused-state
+// resume smoothing below). Kept at InputFilter's enforced minimum (10s) to
+// stay as responsive as possible while still rejecting multi-second
+// transient spikes (e.g. an EV's precharge/self-test pulse at charge start).
+#ifndef EVSE_SHAPER_SAFETY_FILTER_TAU
+#define EVSE_SHAPER_SAFETY_FILTER_TAU 10 // sec
+#endif
+
+// Safety valve: if the EV never quite reaches the commanded current (e.g. its
+// own onboard limit), stop waiting for it after this long so headroom doesn't
+// go permanently unused.
+#ifndef EVSE_SHAPER_SETTLE_TIMEOUT
+#define EVSE_SHAPER_SETTLE_TIMEOUT 30 // sec
 #endif
 
 #include "emonesp.h"
@@ -38,11 +56,28 @@ class CurrentShaperTask: public MicroTasks::Task
     uint32_t     _timer;
     uint32_t     _pause_timer;
     bool         _updated;
+    // Set after every claimed change, cleared on the next live-power reading.
+    // Blocks normal (non-pause) adjustments from acting on a house-power
+    // figure that predates the EV's response to our last change.
+    bool         _awaiting_fresh_reading;
+    // Last max current we actually claimed, and when. Increases (only) wait
+    // for evse.getAmps() to catch up to this before claiming a further
+    // increase - decreases and pausing always act immediately. See loop().
+    double       _last_claimed_cur;
+    uint32_t     _last_change_time;
     InputFilter  _inputFilter;
+    // Short-tau smoothed live power, used only for the pause/over-budget
+    // entry decision in loop() - independent of _smoothed_live_pwr above,
+    // which only tracks once already paused and is biased for that purpose.
+    double       _safety_live_pwr;
+    bool         _safety_filter_seeded;
+    double       _safety_max_cur;   // max current computed from _safety_live_pwr
+    InputFilter  _safetyFilter;     // separate instance: InputFilter tracks _last_data_time per-instance
 
   protected:
     void setup();
     unsigned long loop(MicroTasks::WakeReason reason);
+    double calcMaxCur(double livepwr);
 
   public:
     CurrentShaperTask();

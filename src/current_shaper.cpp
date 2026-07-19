@@ -15,6 +15,12 @@ CurrentShaperTask::CurrentShaperTask() : MicroTasks::Task() {
 	_pause_timer = 0;
 	_timer = 0;
 	_updated = false;
+	_awaiting_fresh_reading = false;
+	_last_claimed_cur = 0;
+	_last_change_time = 0;
+	_safety_live_pwr = 0;
+	_safety_filter_seeded = false;
+	_safety_max_cur = 0;
 }
 
 CurrentShaperTask::~CurrentShaperTask() {
@@ -32,7 +38,8 @@ unsigned long CurrentShaperTask::loop(MicroTasks::WakeReason reason) {
 			EvseProperties props;
 			if (_changed) {
 				props.setMaxCurrent(floor(_max_cur));
-				if (_max_cur < evse.getMinCurrent()) {
+				bool pausing = _safety_max_cur < evse.getMinCurrent();
+				if (pausing) {
 					// pause temporary, not enough amps available
 					props.setState(EvseState::Disabled);
 					if (!_pause_timer)
@@ -47,19 +54,46 @@ unsigned long CurrentShaperTask::loop(MicroTasks::WakeReason reason) {
 					props.setState(EvseState::None);
 				}
 				_timer = millis();
-				_changed = false;
-				// claim only if we have change
-				if (evse.getState() != props.getState() || evse.getChargeCurrent() != props.getChargeCurrent())
+
+				bool decreasing = !pausing && (floor(_max_cur) < _last_claimed_cur);
+				// Only a decrease that's needed *right now* to get back under
+				// budget is safety-relevant. A decrease while still under budget
+				// is just the same still-ramping EV inflating the reading - not
+				// an emergency, so it gets the same gate as an increase below.
+				// pausing/over_budget are both based on the short-tau-smoothed
+				// _safety_live_pwr/_safety_max_cur, not the raw reading, so a
+				// multi-second transient spike (e.g. an EV's precharge/self-test
+				// pulse at charge start) can't trigger them on a single sample.
+				bool over_budget = _safety_live_pwr >= _max_pwr;
+				bool settled = fabs(evse.getAmps() - _last_claimed_cur) <= EVSE_SHAPER_SETTLE_TOLERANCE
+				            || millis() - _last_change_time > EVSE_SHAPER_SETTLE_TIMEOUT * 1000;
+
+				// Pausing, and a decrease while genuinely over budget, are
+				// safety-relevant and always act immediately. Everything else
+				// (an increase, or a precautionary decrease while still under
+				// budget) waits for both a live-power reading that arrived after
+				// our last change AND the EV's measured current to have caught up
+				// to it, so we never react to a still-ramping/stale picture.
+				if (pausing || (decreasing && over_budget) || (!_awaiting_fresh_reading && settled))
 				{
-					evse.claim(EvseClient_OpenEVSE_Shaper, EvseManager_Priority_Safety, props);
-					StaticJsonDocument<128> event;
-					event["shaper"] = 1;
-					event["shaper_live_pwr"] = _live_pwr;
-					event["shaper_smoothed_live_pwr"] = _smoothed_live_pwr;
-					event["shaper_max_pwr"] = _max_pwr;
-					event["shaper_cur"] = _max_cur;
-					event["shaper_updated"] = _updated;
-					event_send(event);
+					_changed = false;
+					// claim only if we have change
+					if (evse.getState() != props.getState() || evse.getChargeCurrent() != props.getChargeCurrent())
+					{
+						evse.claim(EvseClient_OpenEVSE_Shaper, EvseManager_Priority_Safety, props);
+						_awaiting_fresh_reading = true;
+						_last_claimed_cur = floor(_max_cur);
+						_last_change_time = millis();
+						StaticJsonDocument<192> event;
+						event["shaper"] = 1;
+						event["shaper_live_pwr"] = _live_pwr;
+						event["shaper_smoothed_live_pwr"] = _smoothed_live_pwr;
+						event["shaper_safety_live_pwr"] = _safety_live_pwr;
+						event["shaper_max_pwr"] = _max_pwr;
+						event["shaper_cur"] = _max_cur;
+						event["shaper_updated"] = _updated;
+						event_send(event);
+					}
 				}
 			}
 			else if ( !_updated || millis() - _timer > current_shaper_data_maxinterval * 1000 )
@@ -78,10 +112,14 @@ unsigned long CurrentShaperTask::loop(MicroTasks::WakeReason reason) {
 				{
 					props.setState(EvseState::Disabled);
 					evse.claim(EvseClient_OpenEVSE_Shaper, EvseManager_Priority_Limit, props);
-					StaticJsonDocument<128> event;
+					_awaiting_fresh_reading = true;
+					_last_claimed_cur = 0;
+					_last_change_time = millis();
+					StaticJsonDocument<192> event;
 					event["shaper"] = 1;
 					event["shaper_live_pwr"] = _live_pwr;
 					event["shaper_smoothed_live_pwr"] = _smoothed_live_pwr;
+					event["shaper_safety_live_pwr"] = _safety_live_pwr;
 					event["shaper_max_pwr"] = _max_pwr;
 					event["shaper_cur"] = _max_cur;
 					event["shaper_updated"] = _updated;
@@ -109,6 +147,12 @@ void CurrentShaperTask::begin(EvseManager &evse) {
 	this -> _smoothed_live_pwr = 0;
 	this -> _max_cur = 0;
 	this -> _updated = false;
+	this -> _awaiting_fresh_reading = false;
+	this -> _last_claimed_cur = 0;
+	this -> _last_change_time = 0;
+	this -> _safety_live_pwr = 0;
+	this -> _safety_filter_seeded = false;
+	this -> _safety_max_cur = 0;
 	MicroTask.startTask(this);
 	StaticJsonDocument<128> event;
 	event["shaper"]  = 1;
@@ -133,6 +177,9 @@ void CurrentShaperTask::setMaxPwr(int max_pwr) {
 
 void CurrentShaperTask::setLivePwr(int live_pwr) {
 	_live_pwr = live_pwr;
+	// A genuinely new reading has arrived, so it's now safe to act on the
+	// next calculation - it reflects conditions after our last change.
+	_awaiting_fresh_reading = false;
 	shapeCurrent();
 }
 
@@ -148,10 +195,24 @@ void CurrentShaperTask::setState(bool state) {
 	event_send(event);
 }
 
+double CurrentShaperTask::calcMaxCur(double livepwr) {
+	int max_pwr = _max_pwr;
+
+	if (config_divert_enabled() == true) {
+		if ( divert_type == DIVERT_TYPE_SOLAR ) {
+			max_pwr += solar;
+		}
+	}
+
+	if(!config_threephase_enabled()) {
+		return ((max_pwr - livepwr) / evse.getVoltage()) + evse.getAmps();
+	}
+
+	return ((max_pwr - livepwr) / evse.getVoltage() / 3.0) + evse.getAmps();
+}
+
 void CurrentShaperTask::shapeCurrent() {
 	_updated = true;
-	// adding self produced energy to total
-	int max_pwr = _max_pwr;
 
 	int livepwr;
 	DBUGVAR(_pause_timer);
@@ -169,23 +230,24 @@ void CurrentShaperTask::shapeCurrent() {
 		livepwr = _smoothed_live_pwr;
 	}
 
-	if (config_divert_enabled() == true) {
-		if ( divert_type == DIVERT_TYPE_SOLAR ) {
-			max_pwr += solar;
-		}
-	}
-//	if (livepwr > max_pwr) {
-//		livepwr = max_pwr;
-//	}
-	if(!config_threephase_enabled()) {
-		_max_cur = ((max_pwr - livepwr) / evse.getVoltage()) + evse.getAmps();
-	 }
+	_max_cur = calcMaxCur(livepwr);
 
+	// Independent, always-on short-tau smoothing used only for the
+	// pause/over-budget entry decision in loop() - so a multi-second
+	// transient spike (e.g. an EV's precharge/self-test pulse) can't slam
+	// the charge into pause on a single raw sample. Runs regardless of
+	// _pause_timer, unlike _smoothed_live_pwr above, since the entry
+	// decision this protects happens precisely while not yet paused.
+	if (!_safety_filter_seeded) {
+		// Seed to the raw reading (not filtered) so a genuine overload
+		// already present on the very first-ever reading isn't masked.
+		_safety_live_pwr = _live_pwr;
+		_safety_filter_seeded = true;
+	}
 	else {
-		_max_cur = ((max_pwr - livepwr) / evse.getVoltage() / 3.0) + evse.getAmps();
+		_safety_live_pwr = _safetyFilter.filter(_live_pwr, _safety_live_pwr, EVSE_SHAPER_SAFETY_FILTER_TAU);
 	}
-
-
+	_safety_max_cur = calcMaxCur(_safety_live_pwr);
 
 	_changed = true;
 }
