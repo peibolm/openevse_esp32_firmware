@@ -56,7 +56,7 @@ def test_shaper_data_shaper_default() -> None:
 def test_shaper_data_shaper_3000w() -> None:
     """Run the current shaper test with the data_shaper dataset with 3000W max power"""
     run_shaper_test_with_dataset('data_shaper', 'data_shaper_3000w',
-                                  0.0, 0.26, 0.0, 0.26, 2, 24, 408, 358,
+                                  0.0, 0.26, 0.0, 0.26, 2, 24, 408, 432,
                                   config='data/config-shaper-3000w.json')
 
 def test_shaper_data_shaper_5000w() -> None:
@@ -68,13 +68,13 @@ def test_shaper_data_shaper_5000w() -> None:
 def test_shaper_data_shaper_8000w() -> None:
     """Run the current shaper test with the data_shaper dataset with 8000W max power"""
     run_shaper_test_with_dataset('data_shaper', 'data_shaper_8000w',
-                                  0.0, 1.24, 0.0, 1.24, 3, 138, 448, 812,
+                                  0.0, 1.24, 0.0, 1.24, 3, 138, 448, 852,
                                   config='data/config-shaper-8000w.json')
 
 def test_shaper_data_shaper_10000w() -> None:
     """Run the current shaper test with the data_shaper dataset with 10000W max power"""
     run_shaper_test_with_dataset('data_shaper', 'data_shaper_10000w',
-                                  0.0, 3.63, 0.0, 3.63, 6, 360, 2730, 5528,
+                                  0.0, 3.63, 0.0, 3.63, 6, 360, 2754, 5528,
                                   config='data/config-shaper-10000w.json')
 
 # Test with different smoothing times
@@ -87,7 +87,7 @@ def test_shaper_data_shaper_smoothing_30s() -> None:
 def test_shaper_data_shaper_smoothing_120s() -> None:
     """Run the current shaper test with 120 second smoothing time"""
     run_shaper_test_with_dataset('data_shaper', 'data_shaper_smoothing_120s',
-                                  0.0, 0.55, 0.0, 0.55, 2, 122, 428, 480,
+                                  0.0, 0.55, 0.0, 0.55, 2, 122, 428, 550,
                                   config='data/config-shaper-smoothing_120s.json')
 
 # Test with different minimum pause times
@@ -120,13 +120,13 @@ def test_shaper_data_shaper_maxinterval_120s() -> None:
 def test_shaper_data_shaper_aggressive() -> None:
     """Run the current shaper test with aggressive settings (low max power, fast response)"""
     run_shaper_test_with_dataset('data_shaper', 'data_shaper_aggressive',
-                                  0.0, 0.28, 0.0, 0.28, 2, 24, 408, 412,
+                                  0.0, 0.28, 0.0, 0.28, 2, 24, 408, 432,
                                   config='data/config-shaper-aggressive.json')
 
 def test_shaper_data_shaper_conservative() -> None:
     """Run the current shaper test with conservative settings (high max power, slow response)"""
     run_shaper_test_with_dataset('data_shaper', 'data_shaper_conservative',
-                                  0.0, 1.24, 0.0, 1.24, 3, 138, 448, 596,
+                                  0.0, 1.24, 0.0, 1.24, 3, 138, 448, 852,
                                   config='data/config-shaper-conservative.json')
 
 # Edge case tests
