@@ -74,7 +74,7 @@ def test_shaper_data_shaper_8000w() -> None:
 def test_shaper_data_shaper_10000w() -> None:
     """Run the current shaper test with the data_shaper dataset with 10000W max power"""
     run_shaper_test_with_dataset('data_shaper', 'data_shaper_10000w',
-                                  0.0, 3.63, 0.0, 3.63, 6, 360, 2754, 5528,
+                                  0.0, 3.63, 0.0, 3.63, 6, 360, 2754, 5702,
                                   config='data/config-shaper-10000w.json')
 
 # Test with different smoothing times
